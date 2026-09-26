@@ -15,6 +15,7 @@ export interface SpawnResult {
     pid: number;
     logPath: string;
     exit: Promise<SpawnExit>;
+    unref: () => void;
 }
 
 /**
@@ -37,6 +38,7 @@ export function spawnWithFileOutput(args: {
      *  separately (readable, but never emitted as an event). */
     errPath?: string;
     signal?: AbortSignal;
+    foreground?: boolean;
 }): SpawnResult {
     ensureLogDir(args.logPath);
     const outFd = openSync(args.logPath, "w");
@@ -96,9 +98,10 @@ export function spawnWithFileOutput(args: {
     }
     void exit.finally(() => args.signal?.removeEventListener("abort", onAbort));
 
-    proc.unref();
+    const unref = () => proc.unref();
+    if (!args.foreground) unref();
 
-    return { pid, logPath: args.logPath, exit };
+    return { pid, logPath: args.logPath, exit, unref };
 }
 
 /** The log dir is a constant (registry.LOG_DIR), so create it once per process
