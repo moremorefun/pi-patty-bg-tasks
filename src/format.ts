@@ -57,11 +57,7 @@ export function statusLabel(job: Job, duration?: string): string {
 export function formatJobLine(job: Job): string {
     const head = job.name ? `${job.name} (${job.id})` : job.id;
     const kind = job.kind ?? "shell";
-    const duration =
-        job.status === "running"
-            ? ` (${formatDuration(Date.now() - job.startTime)})`
-            : "";
-    return `${head} [${kind}]: ${job.command.slice(0, PREVIEW_CHARS.line)} - ${statusLabel(job)}${duration}`;
+    return `${head} [${kind}]: ${job.command.slice(0, PREVIEW_CHARS.line)} - ${statusLabel(job)}`;
 }
 
 /** Truncate a tail with a consistent "showing last N chars" marker. */
