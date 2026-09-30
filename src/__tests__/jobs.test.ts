@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BackgroundRegistry } from "../state.ts";
 import { registerJobsTool } from "../tools/jobs.ts";
+import { registerInputHandlers } from "../input.ts";
 import { add, createRunningJob } from "../registry.ts";
 import { markNotified } from "../notify.ts";
 import type { Job, UiContext } from "../types.ts";
@@ -120,6 +121,28 @@ void describe("jobs output — read-marks-notified", () => {
             () => tool.execute("t5", { action: "output", jobId: "ghost" }, undefined, undefined, ctx),
             /No task found with ID: ghost/
         );
+    });
+});
+
+void describe("jobs attach — typed input detaches", () => {
+    void it("returns still-running and keeps the completion notification", async () => {
+        const { tool, reg, ctx } = harness();
+        const job = mkJob(reg, { id: `job-${process.pid}-a1`, command: "deploy" });
+        let inputHandler: ((e: unknown, c: unknown) => Promise<{ action: string }>) | undefined;
+        registerInputHandlers({ on: (_e: string, fn: typeof inputHandler) => { inputHandler = fn; } } as never, reg);
+
+        const pending = tool.execute("t7", { action: "attach", jobId: job.id }, undefined, undefined, ctx);
+        await new Promise((r) => setImmediate(r));
+        assert.equal(reg.attachWaiters.size, 1);
+
+        const result = await inputHandler!({ type: "input", text: "hi", source: "interactive" }, ctx);
+        const res = await pending;
+
+        assert.deepEqual(result, { action: "continue" });
+        assert.match(res.content[0].text, /still running in the background/);
+        assert.equal(job.status, "running");
+        assert.equal(job.notified, false);
+        assert.equal(reg.attachWaiters.size, 0);
     });
 });
 

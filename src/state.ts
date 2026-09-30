@@ -13,6 +13,8 @@ export class BackgroundRegistry {
     /** Per-job AbortController — abort() cancels all monitors/pollers for that job. */
     jobAborts = new Map<string, AbortController>();
 
+    attachWaiters = new Set<() => void>();
+
     nonInteractive = false;
 
     completedCount = 0;

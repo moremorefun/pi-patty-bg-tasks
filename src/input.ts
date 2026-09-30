@@ -11,9 +11,10 @@ export function registerInputHandlers(pi: ExtensionAPI, reg: BackgroundRegistry)
         // re-delivers the input as the next turn — regardless of the message's
         // steer/followUp streamingBehavior. We only intercept when a foreground
         // slot is active; everything else falls through to Pi.
-        if (reg.foreground.size === 0) return { action: "continue" };
         // Don't intercept extension-sourced messages.
         if (event.source === "extension") return { action: "continue" };
+        for (const detach of reg.attachWaiters) detach();
+        if (reg.foreground.size === 0) return { action: "continue" };
 
         const text = event.text;
         const bg = backgroundActiveForeground(reg, ctx as UiContext);

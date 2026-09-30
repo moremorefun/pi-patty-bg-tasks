@@ -229,20 +229,18 @@ async function attachAction(
         // Stream the live log tail while we wait, so "attach" shows progress
         // instead of sitting silent.
         const poller = streamLog(job.logPath, onUpdate);
-        let onAbort: (() => void) | undefined;
+        let detach!: () => void;
+        const detached = new Promise<void>((resolve) => {
+            detach = resolve;
+        });
+        reg.attachWaiters.add(detach);
+        signal?.addEventListener("abort", detach, { once: true });
         try {
-            if (signal && !signal.aborted) {
-                const abortPromise = new Promise<void>((resolve) => {
-                    onAbort = resolve;
-                    signal.addEventListener("abort", onAbort, { once: true });
-                });
-                await Promise.race([job.donePromise, abortPromise]);
-            } else {
-                await job.donePromise;
-            }
+            if (!signal?.aborted) await Promise.race([job.donePromise, detached]);
         } finally {
             poller.stop();
-            if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+            reg.attachWaiters.delete(detach);
+            signal?.removeEventListener("abort", detach);
         }
 
         if (job.status === "running") {
