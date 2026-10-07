@@ -81,25 +81,18 @@ export default function (pi: ExtensionAPI): void {
     });
 
     // ── Session shutdown ──────────────────────────────────────────
+    const reapOnExit = () => reapRunningJobs(reg);
+    process.on("exit", reapOnExit);
+
     pi.on("session_shutdown", async (_event, _ctx) => {
+        process.off("exit", reapOnExit);
         // Stop the live-duration ticker so the interval doesn't outlive the session.
         stopSidebarTicker(reg);
 
         // Claude Code's gracefulShutdown: kill ALL running tasks on ANY
         // shutdown reason, so no orphans outlive the session. The silent-kill
         // path latches `notified`, so no <task-notification> fires on the way
-        // out. Log files are left for the OS to clean. Also covers detached
-        // children (spawn.ts unref) that would otherwise survive a non-quit
-        // parent exit and burn CPU under launchd/PID 1.
+        // out. Log files are left for the OS to clean.
         reapRunningJobs(reg);
     });
-
-    const reapOnExit = () => reapRunningJobs(reg);
-    process.on("exit", reapOnExit);
-    for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-        process.on(sig, () => {
-            reapOnExit();
-            process.exit(sig === "SIGINT" ? 130 : 143);
-        });
-    }
 }

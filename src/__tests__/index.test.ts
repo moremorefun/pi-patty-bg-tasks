@@ -143,6 +143,31 @@ void describe("session_shutdown — kills running tasks on ANY reason", () => {
     }
 });
 
+void describe("process exit \u2014 reaps tasks when session_shutdown never arrives", () => {
+    void it("exit listener kills running tasks, adds no signal handlers, and leaves with the session", async () => {
+        const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+        const exitBefore = process.listeners("exit");
+        const signalCounts = () => signals.map((s) => process.listenerCount(s));
+        const signalsBefore = signalCounts();
+
+        const h = startExtension();
+        await h.handlers.get("session_start")!({}, {});
+        const reapOnExit = process.listeners("exit").find((l) => !exitBefore.includes(l));
+        assert.ok(reapOnExit, "exit listener registered");
+        assert.deepEqual(signalCounts(), signalsBefore, "pi owns SIGHUP/SIGTERM/SIGINT handling");
+
+        await h.tools.get("bash")!.execute("t4", { command: WATCH_CMD, run_in_background: true }, undefined, undefined, uiCtx);
+        assert.ok(liveMarkedProcesses() > 0, "task process is running");
+
+        (reapOnExit as () => void)();
+        await sleep(200);
+        assert.equal(liveMarkedProcesses(), 0, "no orphan after process exit");
+
+        await h.handlers.get("session_shutdown")!({ reason: "quit" }, {});
+        assert.ok(!process.listeners("exit").includes(reapOnExit), "listener removed with the session");
+    });
+});
+
 after(() => {
     // Best-effort cleanup if a test failed mid-flight.
     try {
