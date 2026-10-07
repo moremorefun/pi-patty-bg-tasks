@@ -113,14 +113,24 @@ function ensureLogDir(logPath: string): void {
     logDirCreated = true;
 }
 
+export const KILL_GRACE_MS = 3000;
+
 /**
  * Kill an entire process group via negative PID signal.
  * Falls back to direct PID kill if group kill fails.
- */export function killProcessTree(
+ */
+export function killProcessTree(
     pid: number | undefined,
     signal: NodeJS.Signals = "SIGTERM"
 ): void {
     if (typeof pid !== "number" || pid <= 0) return;
+    signalProcessTree(pid, signal);
+    if (signal === "SIGTERM") {
+        setTimeout(() => signalProcessTree(pid, "SIGKILL"), KILL_GRACE_MS).unref();
+    }
+}
+
+function signalProcessTree(pid: number, signal: NodeJS.Signals): void {
     try {
         process.kill(-pid, signal);
     } catch {

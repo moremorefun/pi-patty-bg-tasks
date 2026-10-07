@@ -10,6 +10,7 @@ import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
 import extension from "../index.ts";
+import { KILL_GRACE_MS } from "../spawn.ts";
 import { EVENT } from "../types.ts";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -17,6 +18,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** A process marker unique to this test run, so pgrep can't hit strangers. */
 const MARKER = `pi-bg-shutdown-test-${process.pid}`;
 const WATCH_CMD = `while true; do sleep 1; done # ${MARKER}`;
+const STUBBORN_CMD = `trap '' TERM; while true; do sleep 0.2; done # ${MARKER}-stubborn`;
+
+function liveStubbornProcesses(): number {
+    try {
+        const out = execSync(`pgrep -f "[w]hile true; do sleep 0.2; done # ${MARKER}-stubborn" | wc -l`, {
+            encoding: "utf-8",
+        });
+        return Number.parseInt(out.trim(), 10);
+    } catch {
+        return 0;
+    }
+}
 
 /** Count live processes whose command line carries our marker. The `[w]hile`
  *  trick keeps the pgrep shell's own cmdline from matching itself. */
@@ -168,9 +181,37 @@ void describe("process exit \u2014 reaps tasks when session_shutdown never arriv
     });
 });
 
+void describe("session_shutdown \u2014 quit kills at once, other reasons escalate", () => {
+    async function startStubborn(id: string) {
+        const h = startExtension();
+        await h.handlers.get("session_start")!({}, {});
+        await h.tools.get("bash")!.execute(id, { command: STUBBORN_CMD, run_in_background: true }, undefined, undefined, uiCtx);
+        await sleep(200);
+        assert.ok(liveStubbornProcesses() > 0, "task process is running");
+        return h;
+    }
+
+    void it("quit SIGKILLs a task that ignores SIGTERM", async () => {
+        const h = await startStubborn("t5");
+        await h.handlers.get("session_shutdown")!({ reason: "quit" }, {});
+        await sleep(200);
+        assert.equal(liveStubbornProcesses(), 0);
+    });
+
+    void it("reload SIGTERMs first and SIGKILLs after the grace period", async () => {
+        const h = await startStubborn("t6");
+        await h.handlers.get("session_shutdown")!({ reason: "reload" }, {});
+        await sleep(500);
+        assert.ok(liveStubbornProcesses() > 0, "SIGTERM is ignored within the grace period");
+        await sleep(KILL_GRACE_MS);
+        assert.equal(liveStubbornProcesses(), 0);
+    });
+});
+
 after(() => {
     // Best-effort cleanup if a test failed mid-flight.
     try {
+        execSync(`pkill -9 -f "[w]hile true; do sleep 0.2; done # ${MARKER}-stubborn" || true`);
         execSync(`pkill -f "[w]hile true; do sleep 1; done # ${MARKER}" || true`);
     } catch {
         /* already gone */

@@ -81,10 +81,10 @@ export default function (pi: ExtensionAPI): void {
     });
 
     // ── Session shutdown ──────────────────────────────────────────
-    const reapOnExit = () => reapRunningJobs(reg);
+    const reapOnExit = () => reapRunningJobs(reg, "SIGKILL");
     process.on("exit", reapOnExit);
 
-    pi.on("session_shutdown", async (_event, _ctx) => {
+    pi.on("session_shutdown", async (event, _ctx) => {
         process.off("exit", reapOnExit);
         // Stop the live-duration ticker so the interval doesn't outlive the session.
         stopSidebarTicker(reg);
@@ -93,6 +93,6 @@ export default function (pi: ExtensionAPI): void {
         // shutdown reason, so no orphans outlive the session. The silent-kill
         // path latches `notified`, so no <task-notification> fires on the way
         // out. Log files are left for the OS to clean.
-        reapRunningJobs(reg);
+        reapRunningJobs(reg, event.reason === "quit" ? "SIGKILL" : "SIGTERM");
     });
 }

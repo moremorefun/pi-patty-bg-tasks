@@ -124,4 +124,32 @@ describe("killProcessTree", () => {
         assert.ok(!processExists(result.pid));
         try { unlinkSync(logPath); } catch {}
     });
+
+    test("escalates to SIGKILL when the group ignores SIGTERM", async () => {
+        const { spawnWithFileOutput, killProcessTree, processExists, KILL_GRACE_MS } = await import("../spawn.ts");
+        mkdirSync(testDir, { recursive: true });
+        const logPath = join(testDir, "test-escalate.log");
+        const result = spawnWithFileOutput({
+            command: "trap '' TERM; while true; do sleep 0.1; done",
+            cwd: process.cwd(),
+            logPath,
+            foreground: true,
+        });
+        try {
+            await new Promise((r) => setTimeout(r, 200));
+            const killedAt = Date.now();
+            killProcessTree(result.pid, "SIGTERM");
+            await new Promise((r) => setTimeout(r, 500));
+            assert.ok(processExists(result.pid), "SIGTERM is ignored");
+            const exit = await Promise.race([
+                result.exit,
+                new Promise<null>((r) => setTimeout(() => r(null), KILL_GRACE_MS + 2_000)),
+            ]);
+            assert.equal(exit?.signal, "SIGKILL");
+            assert.ok(Date.now() - killedAt >= KILL_GRACE_MS - 50);
+        } finally {
+            killProcessTree(result.pid, "SIGKILL");
+        }
+        try { unlinkSync(logPath); } catch {}
+    });
 });

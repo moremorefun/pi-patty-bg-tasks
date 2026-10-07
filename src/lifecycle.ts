@@ -186,9 +186,13 @@ export function markKilledSilently(job: Job): void {
 /** Kill a job quietly and abort its registered monitors/timers. The notified
  *  latch is set BEFORE the kill so the exit handler's notification is
  *  suppressed (Ctrl+Shift+X, jobs kill, session quit). */
-export function terminateJobSilently(reg: BackgroundRegistry, job: Job): void {
+export function terminateJobSilently(
+    reg: BackgroundRegistry,
+    job: Job,
+    signal: NodeJS.Signals = "SIGTERM"
+): void {
     markNotified(job);
-    terminateJob(job);
+    terminateJob(job, signal);
     markKilledSilently(job);
     abortJob(reg, job.id);
 }
@@ -221,14 +225,14 @@ export function abortJob(reg: BackgroundRegistry, jobId: string): void {
  * otherwise signal the recorded PID directly (covers jobs whose proc handle
  * was already dropped).
  */
-export function terminateJob(job: Job): void {
+export function terminateJob(job: Job, signal: NodeJS.Signals = "SIGTERM"): void {
     // Monitors carry a transient teardown hook (follower + ws socket). A ws
     // monitor has pid 0, so the process-tree kill below is a no-op for it and
     // job.stop does the real work; a command monitor needs both.
     job.stop?.();
     // No liveness probe: killProcessTree already swallows ESRCH, and probing
     // first would be a TOCTOU race. killProcessTree itself guards pid <= 0.
-    killProcessTree(job.proc?.pid ?? job.pid, "SIGTERM");
+    killProcessTree(job.proc?.pid ?? job.pid, signal);
 }
 
 // --- Foreground backgrounding --------------------------------------------
@@ -402,10 +406,10 @@ export function detectNonInteractive(
 
 /** Kill every still-running job. Used on session shutdown and process exit so
  *  detached children are not reparented to launchd/PID 1 and left spinning. */
-export function reapRunningJobs(reg: BackgroundRegistry): void {
+export function reapRunningJobs(reg: BackgroundRegistry, signal: NodeJS.Signals = "SIGTERM"): void {
     for (const job of reg.jobs.values()) {
         if (job.status === "running") {
-            terminateJobSilently(reg, job);
+            terminateJobSilently(reg, job, signal);
         }
     }
 }
