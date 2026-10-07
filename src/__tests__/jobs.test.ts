@@ -146,6 +146,27 @@ void describe("jobs attach — typed input detaches", () => {
     });
 });
 
+void describe("jobs attach — wait:false", () => {
+    void it("reports a running job as running and keeps its completion notification", async () => {
+        const { tool, reg, ctx } = harness();
+        const job = mkJob(reg, { id: `job-${process.pid}-a2`, command: "serve" });
+        const res = await tool.execute("t8", { action: "attach", jobId: job.id, wait: false }, undefined, undefined, ctx);
+        assert.match(res.content[0].text, /is still running/);
+        assert.doesNotMatch(res.content[0].text, /finished/);
+        assert.equal(job.notified, undefined);
+    });
+
+    void it("reports a terminal job as finished", async () => {
+        const { tool, reg, ctx } = harness();
+        const job = mkJob(reg, { id: `job-${process.pid}-a3`, command: "build" });
+        job.status = "completed";
+        job.exitCode = 0;
+        const res = await tool.execute("t9", { action: "attach", jobId: job.id, wait: false }, undefined, undefined, ctx);
+        assert.match(res.content[0].text, /finished\. Status: completed/);
+        assert.equal(job.notified, true);
+    });
+});
+
 void describe("jobs list — lazy sweep", () => {
     void it("sweeps terminal+notified jobs into the recent-terminal ring", async () => {
         const { tool, reg, ctx } = harness();
