@@ -141,9 +141,32 @@ void describe("bash tool — Claude Code tool-result strings", () => {
             undefined,
             ctx
         );
-        assert.match(res.content[0].text, /Command timed out after 1s/);
+        assert.match(res.content[0].text, /Command timed out after 1s\n\nCommand exited with code 143$/);
         assert.equal(res.structuredContent?.exit_code, 143);
-        assert.equal(res.isError, undefined);
+        assert.equal(res.isError, true);
+    });
+
+    void it("a foreground command killed by an external signal is an error", async () => {
+        const { tool, reg, ctx } = harness();
+        const pending = tool.execute("t4k", { command: "echo started; tail -f /dev/null" }, undefined, undefined, ctx);
+        await sleep(300);
+        killProcessTree(onlyJob(reg).pid, "SIGKILL");
+        const res = await pending;
+        assert.equal(res.isError, true);
+        assert.equal(res.content[0].text, "started\n\nCommand exited with code 137");
+        assert.equal(res.structuredContent?.exit_code, 137);
+    });
+
+    void it("a turn abort kills the command and reports it as aborted", async () => {
+        const { tool, ctx } = harness();
+        const ac = new AbortController();
+        const pending = tool.execute("t4a", { command: "echo started; tail -f /dev/null" }, ac.signal, undefined, ctx);
+        await sleep(300);
+        ac.abort();
+        const res = await pending;
+        assert.equal(res.isError, true);
+        assert.equal(res.content[0].text, "started\n\nCommand aborted");
+        assert.equal(res.structuredContent?.exit_code, 143);
     });
 
     void it("an external signal death is reported as killed ('was stopped'), never completed", async () => {
@@ -198,7 +221,7 @@ void describe("bash tool \u2014 structured results for codemode", () => {
             ctx
         );
         assert.equal(res.isError, true);
-        assert.equal(res.content[0].text, "out\nerr\n");
+        assert.equal(res.content[0].text, "out\nerr\n\nCommand exited with code 3");
         assert.equal(res.structuredContent?.output, "out\nerr\n");
         assert.equal(res.structuredContent?.exit_code, 3);
     });
@@ -207,6 +230,14 @@ void describe("bash tool \u2014 structured results for codemode", () => {
         const { tool, ctx } = harness();
         const res = await tool.execute("s3", { command: "true" }, undefined, undefined, ctx);
         assert.equal(res.structuredContent?.output, "");
+        assert.equal(res.content[0].text, "(no output)");
+    });
+
+    void it("a failing command with no output reports only its status", async () => {
+        const { tool, ctx } = harness();
+        const res = await tool.execute("s3e", { command: "exit 2" }, undefined, undefined, ctx);
+        assert.equal(res.isError, true);
+        assert.equal(res.content[0].text, "Command exited with code 2");
     });
 
     void it("output over 1 MiB keeps head and tail and leaves the full log on disk", async () => {

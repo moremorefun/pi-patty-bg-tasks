@@ -159,6 +159,7 @@ async function runForeground(args: {
 
     // Register the foreground slot so Ctrl+Shift+B can find this command.
     let pauseRequested = false;
+    let aborted = false;
     let handedToBackground = false;
     let pauseResolve: ((reason: "manual" | "timeout") => void) | null = null;
     const pausePromise = new Promise<"manual" | "timeout">((r) => {
@@ -178,7 +179,9 @@ async function runForeground(args: {
     // Long-running work is protected the CC way — by auto-backgrounding at the
     // timeout — not by refusing to honor a deliberate cancel.
     const onTurnAbort = () => {
-        if (!pauseRequested) killProcessTree(spawned.pid, "SIGTERM");
+        if (pauseRequested) return;
+        aborted = true;
+        killProcessTree(spawned.pid, "SIGTERM");
     };
     if (signal) {
         if (signal.aborted) onTurnAbort();
@@ -262,17 +265,17 @@ async function runForeground(args: {
             exit_code: exitCode,
             wall_time_seconds: Math.round((performance.now() - startedAt) / 100) / 10,
         };
-        // A signal death (e.g. Esc-cancel killed the process group) is a
-        // deliberate cancel, not a command failure — never an error result.
-        if (exit.signal === null && exit.code !== 0) {
+        const hasOutput = full.output !== "";
+        if (exitCode !== 0) {
+            const status = aborted ? "Command aborted" : `Command exited with code ${exitCode}`;
             return {
-                content: [textBlock(output || `Command exited with code ${exitCode}`)],
+                content: [textBlock(hasOutput ? `${output.trimEnd()}\n\n${status}` : status)],
                 details: undefined,
                 structuredContent,
                 isError: true,
             };
         }
-        return { content: [textBlock(output || "(no output)")], details: undefined, structuredContent };
+        return { content: [textBlock(hasOutput ? output : "(no output)")], details: undefined, structuredContent };
     };
 
     try {
