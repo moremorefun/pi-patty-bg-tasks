@@ -18,16 +18,18 @@ import {
     type BashToolDetails,
 } from "@earendil-works/pi-coding-agent";
 import { appendFileSync, unlinkSync } from "node:fs";
+import { constants as osConstants } from "node:os";
 import type { BackgroundRegistry } from "../state.ts";
 import {
     DEFAULT_TIMEOUT_MS,
     OUTPUT_PREVIEW_CHARS,
     QUICK_COMPLETION_MS,
+    STRUCTURED_OUTPUT_MAX_BYTES,
     type ForegroundSlot,
     type UiContext,
 } from "../types.ts";
 import { spawnWithFileOutput, killProcessTree, type SpawnExit } from "../spawn.ts";
-import { streamLog } from "../output.ts";
+import { readStructuredOutput, streamLog } from "../output.ts";
 import { showBackgroundHint, clearBackgroundHint } from "../hint.ts";
 import {
     add,
@@ -47,7 +49,7 @@ import {
     startBackgroundJob,
 } from "../lifecycle.ts";
 import { textBlock } from "../format.ts";
-import { bashParamSchema } from "./bash-params.ts";
+import { bashOutputSchema, bashParamSchema } from "./bash-params.ts";
 
 /** UI context + cwd is all this tool needs from the host context. */
 type BashCtx = UiContext & { cwd: string };
@@ -75,6 +77,7 @@ export function registerBashTool(
             "Read background output with jobs action='output'.",
         ],
         parameters: bashParamSchema,
+        outputSchema: bashOutputSchema,
 
         async execute(toolCallId, params, signal, onUpdate, ctx) {
             const p = params as {
@@ -151,6 +154,8 @@ async function runForeground(args: {
         logPath,
         foreground: true,
     });
+    const startedAt = performance.now();
+    let keepLog = false;
 
     // Register the foreground slot so Ctrl+Shift+B can find this command.
     let pauseRequested = false;
@@ -244,12 +249,27 @@ async function runForeground(args: {
         exit: SpawnExit
     ): AgentToolResult<BashToolDetails | undefined> => {
         const output = readLogTail(job, OUTPUT_PREVIEW_CHARS);
+        const full = readStructuredOutput(logPath, STRUCTURED_OUTPUT_MAX_BYTES);
+        keepLog = full.truncated;
+        const exitCode = exit.code ?? 128 + osConstants.signals[exit.signal!];
+        const structuredContent = {
+            output: full.output,
+            truncated: full.truncated,
+            ...(full.truncated ? { full_output_path: logPath } : {}),
+            exit_code: exitCode,
+            wall_time_seconds: Math.round((performance.now() - startedAt) / 100) / 10,
+        };
         // A signal death (e.g. Esc-cancel killed the process group) is a
         // deliberate cancel, not a command failure — never an error result.
         if (exit.signal === null && exit.code !== 0) {
-            throw new Error(output || `Command exited with code ${exit.code ?? 1}`);
+            return {
+                content: [textBlock(output || `Command exited with code ${exitCode}`)],
+                details: undefined,
+                structuredContent,
+                isError: true,
+            };
         }
-        return { content: [textBlock(output || "(no output)")], details: undefined };
+        return { content: [textBlock(output || "(no output)")], details: undefined, structuredContent };
     };
 
     try {
@@ -289,7 +309,11 @@ async function runForeground(args: {
                 race.reason === "manual"
                     ? `Command was manually backgrounded by user with ID: ${id}. Output is being written to: ${logPath}`
                     : `Command running in background with ID: ${id}. Output is being written to: ${logPath}`;
-            return { content: [textBlock(text)], details: undefined };
+            return {
+                content: [textBlock(text)],
+                details: undefined,
+                structuredContent: { job_id: id, output_path: logPath },
+            };
         }
 
         // Normal completion.
@@ -301,7 +325,9 @@ async function runForeground(args: {
         reg.foreground.delete(toolCallId);
         if (!handedToBackground) {
             reg.jobs.delete(id);
-            try { unlinkSync(logPath); } catch { /* best-effort */ }
+            if (!keepLog) {
+                try { unlinkSync(logPath); } catch { /* best-effort */ }
+            }
         }
     }
 }
@@ -344,5 +370,6 @@ function spawnBackground(args: {
             ),
         ],
         details: undefined,
+        structuredContent: { job_id: id, output_path: logPath },
     };
 }

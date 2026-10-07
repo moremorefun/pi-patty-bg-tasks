@@ -1,5 +1,6 @@
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, statSync, unlinkSync } from "node:fs";
 import { BackgroundRegistry } from "../state.ts";
 import { registerBashTool } from "../tools/bash.ts";
 import { killProcessTree } from "../spawn.ts";
@@ -14,7 +15,11 @@ interface ToolDef {
         signal: AbortSignal | undefined,
         onUpdate: unknown,
         ctx: unknown
-    ) => Promise<{ content: Array<{ type: "text"; text: string }> }>;
+    ) => Promise<{
+        content: Array<{ type: "text"; text: string }>;
+        structuredContent?: Record<string, unknown>;
+        isError?: boolean;
+    }>;
 }
 
 interface CapturedMessage {
@@ -87,6 +92,7 @@ void describe("bash tool — Claude Code tool-result strings", () => {
             res.content[0].text,
             `Command was manually backgrounded by user with ID: ${job.id}. Output is being written to: ${job.logPath}`
         );
+        assert.deepEqual(res.structuredContent, { job_id: job.id, output_path: job.logPath });
     });
 
     void it("timeout auto-background returns the same generic CC string", async () => {
@@ -118,6 +124,8 @@ void describe("bash tool — Claude Code tool-result strings", () => {
             ctx
         );
         assert.match(res.content[0].text, /Command timed out after 1s/);
+        assert.equal(res.structuredContent?.exit_code, 143);
+        assert.equal(res.isError, undefined);
     });
 
     void it("an external signal death is reported as killed ('was stopped'), never completed", async () => {
@@ -141,6 +149,78 @@ void describe("bash tool — Claude Code tool-result strings", () => {
         assert.ok(terminals[0].content.includes("was stopped"));
         assert.ok(!terminals[0].content.includes("completed"));
         assert.equal(job.status, "killed");
+    });
+
+    after(() => {
+        for (const pid of spawnedPids) {
+            try { killProcessTree(pid, "SIGKILL"); } catch { /* already gone */ }
+        }
+    });
+});
+
+void describe("bash tool \u2014 structured results for codemode", () => {
+    const spawnedPids: number[] = [];
+
+    void it("a successful command resolves to its output, exit code and wall time", async () => {
+        const { tool, ctx } = harness();
+        const res = await tool.execute("s1", { command: "printf hi" }, undefined, undefined, ctx);
+        const { wall_time_seconds, ...rest } = res.structuredContent ?? {};
+        assert.deepEqual(rest, { output: "hi", truncated: false, exit_code: 0 });
+        assert.equal(typeof wall_time_seconds, "number");
+        assert.equal(res.isError, undefined);
+    });
+
+    void it("a failing command returns an error result with its exit code instead of throwing", async () => {
+        const { tool, ctx } = harness();
+        const res = await tool.execute(
+            "s2",
+            { command: "echo out; echo err >&2; exit 3" },
+            undefined,
+            undefined,
+            ctx
+        );
+        assert.equal(res.isError, true);
+        assert.equal(res.content[0].text, "out\nerr\n");
+        assert.equal(res.structuredContent?.output, "out\nerr\n");
+        assert.equal(res.structuredContent?.exit_code, 3);
+    });
+
+    void it("empty output is an empty string", async () => {
+        const { tool, ctx } = harness();
+        const res = await tool.execute("s3", { command: "true" }, undefined, undefined, ctx);
+        assert.equal(res.structuredContent?.output, "");
+    });
+
+    void it("output over 1 MiB keeps head and tail and leaves the full log on disk", async () => {
+        const { tool, ctx } = harness();
+        const res = await tool.execute(
+            "s4",
+            { command: "head -c 1200000 /dev/zero | tr '\\0' a; echo END" },
+            undefined,
+            undefined,
+            ctx
+        );
+        const sc = res.structuredContent ?? {};
+        const fullPath = sc.full_output_path as string;
+        assert.equal(sc.truncated, true);
+        assert.ok(existsSync(fullPath));
+        assert.equal(statSync(fullPath).size, 1_200_004);
+        assert.ok(/^a+\n\n\[\.\.\. 151428 bytes omitted \.\.\.\]\n\na+END\n$/.test(sc.output as string));
+        unlinkSync(fullPath);
+    });
+
+    void it("run_in_background resolves to the job id and output path", async () => {
+        const { tool, reg, ctx } = harness();
+        const res = await tool.execute(
+            "s5",
+            { command: "tail -f /dev/null", run_in_background: true },
+            undefined,
+            undefined,
+            ctx
+        );
+        const job = onlyJob(reg);
+        spawnedPids.push(job.pid);
+        assert.deepEqual(res.structuredContent, { job_id: job.id, output_path: job.logPath });
     });
 
     after(() => {

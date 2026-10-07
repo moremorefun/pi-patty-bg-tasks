@@ -1,5 +1,5 @@
 /**
- * Shared bash parameter schema (TypeBox) used by the overridden `bash` tool.
+ * Bash parameter and output schemas (TypeBox) used by the overridden `bash` tool.
  */
 
 import { Type } from "@earendil-works/pi-ai";
@@ -20,3 +20,17 @@ export const bashParamSchema = Type.Object({
         Type.String({ description: "Short description of what this command does" })
     ),
 });
+
+export const bashOutputSchema = Type.Union([
+    Type.Object({
+        output: Type.String(),
+        truncated: Type.Boolean(),
+        full_output_path: Type.Optional(Type.String()),
+        exit_code: Type.Number(),
+        wall_time_seconds: Type.Number(),
+    }),
+    Type.Object({
+        job_id: Type.String(),
+        output_path: Type.String(),
+    }),
+]);

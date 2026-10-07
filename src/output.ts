@@ -1,6 +1,31 @@
 // src/output.ts
-import { closeSync, fstatSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { FOREGROUND_TAIL_BYTES } from "./types.ts";
+
+export function readStructuredOutput(
+    logPath: string,
+    maxBytes: number
+): { output: string; truncated: boolean } {
+    const fd = openSync(logPath, "r");
+    try {
+        const { size } = fstatSync(fd);
+        if (size <= maxBytes) return { output: readFileSync(fd, "utf-8"), truncated: false };
+        const head = Buffer.alloc(Math.floor(maxBytes / 2));
+        const tail = Buffer.alloc(maxBytes - head.length);
+        readSync(fd, head, 0, head.length, 0);
+        readSync(fd, tail, 0, tail.length, size - tail.length);
+        let tailStart = 0;
+        while (tailStart < tail.length && (tail[tailStart] & 0xc0) === 0x80) tailStart++;
+        const headText = new TextDecoder().decode(head, { stream: true });
+        const tailText = new TextDecoder().decode(tail.subarray(tailStart));
+        return {
+            output: `${headText}\n\n[... ${size - maxBytes} bytes omitted ...]\n\n${tailText}`,
+            truncated: true,
+        };
+    } finally {
+        closeSync(fd);
+    }
+}
 
 /**
  * Read the tail of a log file, bounded by maxChars. Only the last maxChars
