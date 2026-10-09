@@ -9,6 +9,7 @@
 import { describe, it, after } from "node:test";
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import extension from "../index.ts";
 import { KILL_GRACE_MS } from "../spawn.ts";
 import { EVENT } from "../types.ts";
@@ -58,18 +59,27 @@ interface CapturedTool {
 
 type SessionHandler = (event: { reason?: string }, ctx: unknown) => Promise<void>;
 
+type MessageRenderer = (
+    message: { content: unknown; details?: unknown },
+    options: unknown,
+    theme: { fg(colour: string, text: string): string }
+) => { render(width: number): string[] };
+
 function makePi() {
     const tools = new Map<string, CapturedTool>();
     const handlers = new Map<string, SessionHandler>();
     const messages: { customType: string }[] = [];
     const appendedEntries: unknown[] = [];
+    const renderers = new Map<string, MessageRenderer>();
     const pi = {
         registerTool(def: CapturedTool) {
             tools.set(def.name, def);
         },
         registerShortcut() {},
         registerCommand() {},
-        registerMessageRenderer() {},
+        registerMessageRenderer(customType: string, renderer: MessageRenderer) {
+            renderers.set(customType, renderer);
+        },
         on(event: string, handler: SessionHandler) {
             handlers.set(event, handler);
         },
@@ -80,7 +90,7 @@ function makePi() {
             appendedEntries.push(data);
         },
     };
-    return { pi, tools, handlers, messages, appendedEntries };
+    return { pi, tools, handlers, messages, appendedEntries, renderers };
 }
 
 const uiCtx = {
@@ -206,6 +216,27 @@ void describe("session_shutdown \u2014 quit kills at once, other reasons escalat
         await sleep(KILL_GRACE_MS);
         assert.equal(liveStubbornProcesses(), 0);
     });
+});
+
+void describe("message renderers fit the terminal width", () => {
+    for (const customType of [EVENT.taskNotification, EVENT.stall]) {
+        void it(`truncates ${customType} to the render width`, () => {
+            const h = startExtension();
+            const renderer = h.renderers.get(customType);
+            assert.ok(renderer);
+            const summary = `Background command "${"ssh node 'sudo nice -n 10 long command' ".repeat(5)}" failed with exit code 255`;
+            const component = renderer(
+                { content: summary, details: { status: "failed", summary } },
+                {},
+                { fg: (_c, t) => `\x1b[31m${t}\x1b[39m` }
+            );
+            for (const width of [20, 85]) {
+                const lines = component.render(width);
+                assert.equal(lines.length, 1);
+                assert.ok(visibleWidth(lines[0]) <= width, `width ${visibleWidth(lines[0])} > ${width}`);
+            }
+        });
+    }
 });
 
 after(() => {
